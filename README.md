@@ -1,6 +1,6 @@
-# 🍽️ Silver Platter
+# 🍽️ Cerve
 
-Your web application served on a silver platter by C99.
+Serving web applications on silver platters since C99.
 
 ## 🌐 References
 

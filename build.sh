@@ -1,2 +1,2 @@
 #!/bin/bash
-gcc -std=gnu99 -pedantic-errors -Wall main.c -o main
+gcc -std=gnu99 -pedantic-errors -Wall cerve.c -o cerve
