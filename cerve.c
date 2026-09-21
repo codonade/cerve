@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -33,12 +34,21 @@ char *file_mime_time(char *file_path) {
     else return "text/plain";
 }
 
+#define fail_if_error(message) if (error == -1) return failure(message);
+int failure(const char *message) {
+    perror(message);
+    return 1;
+}
+
 // TEMP: Decide on a reasonable request/response buffer sizes! 
-// TEMP: Please... handle errors... I'm begging you!
 int main(void) {
+    int error;
+
     // - create an IPv4 socket using a reliable, connection-oriented byte stream (TCP).
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+    if (server_socket == -1) return failure("Error creating socket");
+    error = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+    fail_if_error("Error setting socket options");
 
     // - assign an address to the socket.
     struct sockaddr_in server_address = {
@@ -48,20 +58,25 @@ int main(void) {
             .s_addr = htonl(INADDR_LOOPBACK),
         },
     };
-    bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address));
+    error = bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address));
+    fail_if_error("Error assigning an address to the socket");
 
     // - begin listening for connections.
-    listen(server_socket, 256);
+    error = listen(server_socket, 256);
+    fail_if_error("Error listening for connections");
     char host_name[NI_MAXHOST], service_name[NI_MAXSERV];
-    getnameinfo((struct sockaddr *)&server_address, sizeof(server_address),
+    error = getnameinfo((struct sockaddr *)&server_address, sizeof(server_address),
             host_name, sizeof(host_name), service_name, sizeof(service_name), 0);
+    fail_if_error("Error getting name info");
     printf("Listening on http://%s:%s\n", host_name, service_name);
 
     while (1) {
         // - wait for requests.
         char request[1024] = {0};
         int client_socket = accept(server_socket, 0, 0);
-        recv(client_socket, request, 1024, 0);
+        if (client_socket == -1) return failure("Error accepting connections");
+        error = recv(client_socket, request, 1024, 0);
+        fail_if_error("Error receiving messages");
 
         // - parse the incoming request.
         char method[8] = {0}, target[256] = {0};
@@ -83,18 +98,31 @@ int main(void) {
                     strcat(file_path, ".html");
             }
 
-            // - respond with the file's contents.
+            // - try opening the corresponding file.
             char *mime_type = file_mime_time(file_path);
             int file = open(file_path, O_RDONLY);
-            char header[1024] = {0};
-            sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n", mime_type);
-            send(client_socket, header, strlen(header), 0);
-            // TEMP: Make sure the pass in the correct file size!
-            sendfile(client_socket, file, 0, 32 * 1024);
-            close(file);
+            if (file == -1) {
+                if (errno == ENOENT) {
+                    const char response[] = "HTTP/1.1 404 Not Found\r\n\r\n";
+                    error = send(client_socket, response, sizeof(response), 0);
+                    fail_if_error("Error sending 404 Not Found");
+                } else return failure("Error opening file");
+            }
+            else {
+                // - respond with the file's contents.
+                char header[1024] = {0};
+                sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n", mime_type);
+                error = send(client_socket, header, strlen(header), 0);
+                fail_if_error("Error sending response header");
+                // TEMP: Make sure the pass in the correct file size!
+                error = sendfile(client_socket, file, 0, 32 * 1024);
+                fail_if_error("Error sending response body");
+                close(file);
+            }
         }
 
         close(client_socket);
     }
+
     return 0;
 }
