@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define streql !strcmp
@@ -34,7 +35,7 @@ char *file_mime_time(char *file_path) {
     else return "text/plain";
 }
 
-#define fail_if_error(message) if (error == -1) return failure(message);
+#define fail_if_error(message) if (error == -1) return failure(message)
 int failure(const char *message) {
     perror(message);
     return 1;
@@ -109,13 +110,18 @@ int main(void) {
                 } else return failure("Error opening file");
             }
             else {
-                // - respond with the file's contents.
+                // - get the file size in bytes.
+                struct stat file_stat;
+                error = stat(file_path, &file_stat);
+                fail_if_error("Error getting file size");
+                off_t file_size = file_stat.st_size;
+
+                // - respond with the file's content.
                 char header[1024] = {0};
                 sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n", mime_type);
                 error = send(client_socket, header, strlen(header), 0);
                 fail_if_error("Error sending response header");
-                // TEMP: Make sure the pass in the correct file size!
-                error = sendfile(client_socket, file, 0, 32 * 1024);
+                error = sendfile(client_socket, file, 0, file_size);
                 fail_if_error("Error sending response body");
                 close(file);
             }
