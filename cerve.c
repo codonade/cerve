@@ -10,6 +10,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// NOTE: This wasn't given much thought, but for a tiny experiment like this 8KB requests seem enough.
+#define REQUEST_MAX_SIZE 8 * 1024
+
 #define streql !strcmp
 char *file_mime_time(char *file_path) {
     char *extension = strrchr(file_path, '.');
@@ -51,7 +54,6 @@ int foreign_failure(const char *message) {
     return errno;
 }
 
-// TEMP: Decide on a reasonable request/response buffer sizes! 
 int main(int argc, char **argv) {
     int error;
 
@@ -95,10 +97,10 @@ int main(int argc, char **argv) {
 
     while (1) {
         // - wait for requests.
-        char request[1024] = {0};
+        char request[REQUEST_MAX_SIZE] = {0};
         int client_socket = accept(server_socket, 0, 0);
         if (client_socket == -1) return foreign_failure("Error accepting connections");
-        error = recv(client_socket, request, 1024, 0);
+        error = recv(client_socket, request, REQUEST_MAX_SIZE, 0);
         fail_if_error("Error receiving messages");
 
         // - parse the incoming request.
