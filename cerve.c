@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/sendfile.h>
@@ -11,7 +12,7 @@
 
 #define streql !strcmp
 char *file_mime_time(char *file_path) {
-    char *extension = strchr(file_path, '.');
+    char *extension = strrchr(file_path, '.');
 
     // ~ Source Files
     if (streql(extension, ".html"))
@@ -35,19 +36,40 @@ char *file_mime_time(char *file_path) {
     else return "text/plain";
 }
 
-#define fail_if_error(message) if (error == -1) return failure(message)
-int failure(const char *message) {
+int failure(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fputc('\n', stderr);
+    return -1;
+}
+
+#define fail_if_error(message) do{if(error==-1)return foreign_failure(message);}while(0)
+int foreign_failure(const char *message) {
     perror(message);
-    return 1;
+    return errno;
 }
 
 // TEMP: Decide on a reasonable request/response buffer sizes! 
-int main(void) {
+int main(int argc, char **argv) {
     int error;
+
+    // - parse command line arguments.
+    char directory_path[256] = {0};
+    if (argc == 1) strcpy(directory_path, ".");
+    else if (argc == 2) {
+        strcpy(directory_path, argv[1]);
+        struct stat directory_stat;
+        error = stat(directory_path, &directory_stat);
+        if (error == -1 && errno == ENOENT)
+            return failure("'%s' not found!\n", directory_path);
+        else fail_if_error("Error checking directory");
+    } else return failure("USAGE: cerve [directory]\n");
 
     // - create an IPv4 socket using a reliable, connection-oriented byte stream (TCP).
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket == -1) return failure("Error creating socket");
+    if (server_socket == -1) return foreign_failure("Error creating socket");
     error = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
     fail_if_error("Error setting socket options");
 
@@ -75,7 +97,7 @@ int main(void) {
         // - wait for requests.
         char request[1024] = {0};
         int client_socket = accept(server_socket, 0, 0);
-        if (client_socket == -1) return failure("Error accepting connections");
+        if (client_socket == -1) return foreign_failure("Error accepting connections");
         error = recv(client_socket, request, 1024, 0);
         fail_if_error("Error receiving messages");
 
@@ -88,11 +110,13 @@ int main(void) {
         if (streql(method, "GET")) {
             // - extract a file path from the request's target.
             char file_path[256] = {0};
+            strcpy(file_path, directory_path);
+            strcat(file_path, "/");
             if (streql(target, "/"))
-                strcpy(file_path, "index.html");
+                strcat(file_path, "index.html");
             else {
                 // TEMP: We assume that all targets are prefixed by a '/'
-                strcpy(file_path, target + 1);
+                strcat(file_path, target + 1);
                 // When we navigate to a page in a web browser, say /dashboard, the browser doesn't
                 // include the `.html` extension in the request's target.
                 if (!strchr(target, '.'))
@@ -107,7 +131,7 @@ int main(void) {
                     const char response[] = "HTTP/1.1 404 Not Found\r\n\r\n";
                     error = send(client_socket, response, sizeof(response), 0);
                     fail_if_error("Error sending 404 Not Found");
-                } else return failure("Error opening file");
+                } else return foreign_failure("Error opening file");
             }
             else {
                 // - get the file size in bytes.
