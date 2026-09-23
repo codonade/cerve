@@ -3,6 +3,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/sendfile.h>
@@ -10,10 +11,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#define streql !strcmp
 // NOTE: This wasn't given much thought, but for a tiny experiment like this 8KB requests seem enough.
 #define REQUEST_MAX_SIZE 8 * 1024
 
-#define streql !strcmp
 char *file_mime_time(char *file_path) {
     char *extension = strrchr(file_path, '.');
 
@@ -68,6 +69,20 @@ int main(int argc, char **argv) {
             return failure("'%s' not found!\n", directory_path);
         else fail_if_error("Error checking directory");
     } else return failure("USAGE: cerve [directory]\n");
+
+    // - check the environment.
+    char not_found_path[256];
+    sprintf(not_found_path, "%s/404.html", directory_path);
+    int not_found_file = open(not_found_path, O_RDONLY);
+    if (not_found_file == -1) {
+        if (errno == ENOENT) return failure("'%s' does not exist!", not_found_path);
+        else return foreign_failure("Error opening 404 file");
+    }
+    off_t not_found_size; {
+        struct stat not_found_stat;
+        stat(not_found_path, &not_found_stat);
+        not_found_size = not_found_stat.st_size;
+    }
 
     // - create an IPv4 socket using a reliable, connection-oriented byte stream (TCP).
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -130,9 +145,14 @@ int main(int argc, char **argv) {
             int file = open(file_path, O_RDONLY);
             if (file == -1) {
                 if (errno == ENOENT) {
-                    const char response[] = "HTTP/1.1 404 Not Found\r\n\r\n";
-                    error = send(client_socket, response, sizeof(response), 0);
-                    fail_if_error("Error sending 404 Not Found");
+                    const char header[] = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n";
+                    error = send(client_socket, header, sizeof(header), 0);
+                    fail_if_error("Error sending 404 response header");
+                    // NOTE: File offset gets updated by sendfile(...) call, that's why we need to go
+                    // back to the start of the file everytime we want to send it.
+                    lseek(not_found_file, 0, SEEK_SET);
+                    error = sendfile(client_socket, not_found_file, 0, not_found_size);
+                    fail_if_error("Error sending 404 response body");
                 } else return foreign_failure("Error opening file");
             }
             else {
